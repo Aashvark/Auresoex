@@ -1,117 +1,132 @@
-import csv
-import requests
-import pandas as pd
-from re import match
+import csv, re, time, requests
 from urllib.parse import quote
+import pandas as pd
+from datetime import datetime
 
-def reference(url, id, alt = None):
-    print(str(id) + "/" + str(len(names) - 1))
-    pd.read_html(requests.get(url).content)[0].to_csv("temp.csv")
-    with open('temp.csv', mode='r') as file:
-        data = []
-        csvFile = csv.reader(file)
+class Person:
+    def __init__(self, name) -> None:
+        self.name = name
+        self.ids = []
+        self.props = []
+        self.listing = []
 
-        for line in csvFile:
-            data.append(line)
-
-        data = data[1:-6]
-        has = False
-        for dat in data:
-            if dat[4] in ["Single Family Home", "Single Family - more than one house per parcel", "Vacant Residential - lot & acreage less than 5 acres"]: 
-                has = True
-                if dat[2] not in names_n:
-                    names_n.append(dat[2])
-
-        if has == False and alt != None:
-            reference(alt, id)
-
-def list_peeps(url, id):
-    print(str(id) + "/" + str(len(names_n) - 1))
-    pd.read_html(requests.get(url).content)[2].to_csv("temp.csv")
-    with open('temp.csv', mode='r') as file:
-        csvFile = csv.reader(file)
-        data = []
-        for line in csvFile:
-            data.append(line)
-
-        datx = data[2][2].split("  ")[1:]
+    def checkValid(self):
+        split = self.name.split()
+        for s in split:
+            if s in ["LLC", "INC", "CORP", "COMPANY", "AND", "TRUST", "TRUSTEE", "ASSOCIATION", "AMERICA", "BANK", "ASSOCIATES", "STUDIO", "CLUB", "ROOFING", "UNION", "DEPARTMENT", "&", "CITY"]:
+                return False
+            elif re.match("[0-9]", s): return False
+        return True
+    
+    def getIds(self):
+        a = " ".join(quote(self.name, safe='').replace(',', '').replace('.', '').split("%20")).split()
+        a[0] += (a.pop(1) if a[0] == "ST" else "") + "%2C"
         
-        if datx[0] == "Site Address (First Building)":
-            return
-
-        names = datx[0].replace(", EST", "").replace("EST", "").replace("C/O", "").split(' ')[2:]
-
-        index = 0
-        for n in names:
-            if match('[0-9]+', n) or n in ["PO"]:
-                break
-            index += 1
-
-        mail_add = ' '.join(names[index:-2])
-        mail_state = names[-2]
-        mail_zip = names[-1]
-
-        name = []
-        temp = []
-        for idx, n in enumerate(names[:index]):
-            if n.endswith(','):
-                if idx != 0:
-                    name.append(temp)
-                temp = [n]
-            elif idx == len(names[:index]) - 1:
-                if len(temp) < 2:
-                    temp.append(n)
-                name.append(temp)
-            elif len(temp) < 2:
-                temp.append(n)
-
-        usename = []
-        if len(name) <= 2: usename = name[0]
-        else: usename = name[-1]
-
-        site_add = datx[1]
-        site_zip = ""
-
-        if datx[1] == mail_add or site_add.endswith("(Unincorporated)"):
-            site_add = mail_add
-            site_zip = mail_zip
+        if len(a) <= 2: self.reference(f"https://www.pcpao.org/query_name.php?Text1={'+'.join(a)}&nR=500")
         else:
-            site_zip = "?"
+            self.reference(f"https://www.pcpao.org/query_name.php?Text1={a[0]}+{a[1]}+{a[2][0]}&nR=500")
+            if len(self.ids) == 0: self.reference(f"https://www.pcpao.org/query_name.php?Text1={a[0]}+{a[1]}&nR=500")
 
-        row = [usename[1], usename[0].removesuffix(','), mail_add, mail_state, mail_zip, site_add, " ", "FL", site_zip, " "]
-        if row not in rows:
-            rows.append(row)
+    def getDetails(self):
+        for idx, id in enumerate(self.ids):
+            i = id.split('-')
+            self.list(f"https://www.pcpao.org/general.php?strap={i[2]}{i[1]}{i[0]}{i[3]}{i[4]}{i[5]}", id, idx)
+    
+    def getAddress(self, loc):
+        location = requests.get(f"https://nominatim.openstreetmap.org/search?q={quote(loc + ' FL', safe='').replace(',', '').replace('.', '').upper().replace('%20', '+')}&format=json").json()
+        if len(location) == 0:
+            location = requests.get(f"https://nominatim.openstreetmap.org/search?q={quote(loc, safe='').replace(',', '').replace('.', '').upper().replace('%20', '+')}&format=json").json()
+        if len(location) == 0:
+            location = requests.get(f"https://nominatim.openstreetmap.org/search?q={quote(' '.join(loc.split()[:-1]), safe='').replace(',', '').replace('.', '').upper().replace('%20', '+')}&format=json").json()
+        if len(location) == 0:
+            location = requests.get(f"https://nominatim.openstreetmap.org/search?q={quote(' '.join(loc.split()[:-2]), safe='').replace(',', '').replace('.', '').upper().replace('%20', '+')}&format=json").json()
+        if len(location) == 0:
+            location = requests.get(f"https://nominatim.openstreetmap.org/search?q={quote(' '.join(loc.split()[:-3]), safe='').replace(',', '').replace('.', '').upper().replace('%20', '+')}&format=json").json()
+        if len(location) == 0:
+            return []
+        res = location[0]['display_name'].split(',')
+        print(res)
+        return [' '.join(res[:2]), res[2], res[-2]]
 
-names = []
-with open('SearchResults.csv', mode='r') as file:
-    csvFile = csv.reader(file)
+    def reference(self, url):
+        res = pd.read_html(requests.get(url).content)[0]
+        props = res.get("Property Use")[:-6]
+        results = res.get("Parcel Info")[:-6]
+        for idx, r in enumerate(results):
+            if r != "Your search returned no records" and props[idx] in ["Single Family Home", "Single Family - more than one house per parcel", "Vacant Residential - lot & acreage less than 5 acres"] and r not in self.ids:
+                self.ids.append(r)
+                self.props.append(props[idx])
+    
+    def list(self, url, id, idy):
+        res = pd.read_html(requests.get(url).content)[2].get(f"{id} Compact Property Record Card")[1][63:].split("  ")
+        use = res[0].split()
 
-    for line in csvFile:
-        if line[0] not in names:
-            names.append(line[0])
-names = names[1:]
+        if "EST" in use: use.remove("EST")
+        if "(First" in use: return []
 
-names_n = []
-for idx, name in enumerate(names):
-    a = quote(name, safe='').replace(',', '').replace('.', '').upper().split("%20")
-    a[0] = a[0] + "%2C"
-    print(names[idx])
-    if len(a) <= 2 or a[2] in ["SR", "JR", "III"]:
-        reference("https://www.pcpao.org/query_name.php?Text1=" + '+'.join(a) + "&nR=25", idx)
-    else:
-        m = a[:3]
-        print(m)
-        m[2] = m[-1][0]
-        reference("https://www.pcpao.org/query_name.php?Text1=" + '+'.join(m) + "&nR=25", idx, "https://www.pcpao.org/query_name.php?Text1=" + '+'.join(m[:2]))
+        cut = 0
+        for idx, p in enumerate(use):
+            if re.match("[0-9]", p): 
+                cut = idx
+                break
 
-fields = ["First Name", "Last Name", "Mail Address", "Mail State", "Mail Zip", "Property Address", "Property Address 2", "Property State", "Property Zip", "NOTES"]  
-rows = []
-for idy, name in enumerate(names_n):
-    id_split = name.split('-')
-    idx = id_split[2] + id_split[1] + id_split[0] + id_split[3] + id_split[4] + id_split[5]
-    list_peeps("https://www.pcpao.org/general.php?strap=" + str(idx), idy)
+        name = ""
+        if len(use[:cut]) > 6: 
+            name = self.name.split()
+            if name[0] == "ST": name[0] += name.pop(1)
+            name = name[:2] 
+            if len(name) == 0 or len(name) == 1: return
+        else:
+            if use[2] in ["SR", "JR", "III"]: name = [use[0], ' '.join(use[1:3])] 
+            else: name = use[:2]
+        
+        m = self.getAddress(' '.join(use[cut:]))
+        if m == []: return
+        mail_add = m[0]
+        mail_city = m[1]
+        mail_st = use[-2]
+        mail_zip = use[-1]
 
-with open("result.csv", "w", newline='', encoding='utf-8') as file:
+        site_add = res[1]
+        site_city = ""
+        site_st = "FL"
+
+        if res[1].endswith("(Unincorporated)") or mail_add == res[1]:
+            site_add = mail_add 
+            site_zip = mail_zip
+        else: 
+            s = self.getAddress(res[1])
+            if s == []: return
+            site_add = s[0] 
+            site_city = s[1] 
+            site_zip = s[2]
+        
+        criteria = [name[1], name[0].removesuffix(','), mail_add, mail_city, mail_st, mail_zip, site_add, "", site_city, site_st, site_zip, f"{datetime.today().strftime('%Y/%m/%d')}, Type: {self.props[idy]}"]
+        if criteria not in self.listing:
+            self.listing.append(criteria)
+
+start = time.perf_counter()
+people = []
+listings = []
+with open(r"./SearchResults.csv", "r") as file:
+    content = csv.reader(file)
+
+    for c in content:
+        ind = 0
+        if "PROBATE" in c[3]: ind = 0
+        elif "LIEN" in c[3] or "LIS PENDENS" in c[3]: ind = 1
+
+        person = Person(c[ind])
+        if person.checkValid() and c[ind] not in people:
+            person.getIds()
+            if len(person.ids) > 0: 
+                person.getDetails()
+                people.append(person.name)
+                listings.extend(person.listing)
+
+with open(r"result.csv", "w+", newline='', encoding='utf-8') as file:
     csvwriter = csv.writer(file)
-    csvwriter.writerow(fields)
-    csvwriter.writerows(rows) 
+    csvwriter.writerow(["First Name", "Last Name", "Mail Address", "Mail City", "Mail State", "Mail Zip", "Property Address", "Property Address 2", "Property City", "Property State", "Property Zip", "NOTES"])
+    csvwriter.writerows(listings) 
+
+print(f"{time.perf_counter() - start:0.4f}s")
