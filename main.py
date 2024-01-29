@@ -44,8 +44,7 @@ class Person:
             location = requests.get(f"https://nominatim.openstreetmap.org/search?q={quote(' '.join(loc.split()[:-3]), safe='').replace(',', '').replace('.', '').upper().replace('%20', '+')}&format=json").json()
         if len(location) == 0:
             return []
-        res = location[0]['display_name'].split(',')
-        print(res)
+        res = location[0]['display_name'].split(',') 
         return [' '.join(res[:2]), res[2], res[-2]]
 
     def reference(self, url):
@@ -70,15 +69,26 @@ class Person:
                 cut = idx
                 break
 
-        name = ""
-        if len(use[:cut]) > 6: 
-            name = self.name.split()
-            if name[0] == "ST": name[0] += name.pop(1)
-            name = name[:2] 
-            if len(name) == 0 or len(name) == 1: return
-        else:
-            if use[2] in ["SR", "JR", "III"]: name = [use[0], ' '.join(use[1:3])] 
-            else: name = use[:2]
+        names = []
+        temp = []
+        for idx, n in enumerate(use[:cut]):
+            if "ST" in n:
+                use[idx] = n + use[idx]
+                continue
+
+            if n.endswith(','):
+                if idx != 0 and names != []:
+                    names.append(temp)
+                temp = []
+            elif idx == len(use[:cut]) - 1:
+                if len(temp) < 2:
+                    temp.append(n)
+                names.append(temp)
+            elif len(temp) < 2:
+                temp.append(n)
+
+        print(names)
+        relatives = '\n'.join([i[0] for i in names])
         
         m = self.getAddress(' '.join(use[cut:]))
         if m == []: return
@@ -100,33 +110,36 @@ class Person:
             site_add = s[0] 
             site_city = s[1] 
             site_zip = s[2]
-        
-        criteria = [name[1], name[0].removesuffix(','), mail_add, mail_city, mail_st, mail_zip, site_add, "", site_city, site_st, site_zip, f"{datetime.today().strftime('%Y/%m/%d')}, Type: {self.props[idy]}"]
+        if self.checkValid():
+            criteria = [self.name.split()[1], self.name.split()[0].removesuffix(','), "", relatives, mail_add, mail_city, mail_st, mail_zip, site_add, "", site_city, site_st, site_zip, f"{datetime.today().strftime('%Y/%m/%d')}, Type: {self.props[idy]}"]
+        else: criteria = ["", "", self.name, relatives, mail_add, mail_city, mail_st, mail_zip, site_add, "", site_city, site_st, site_zip, f"{datetime.today().strftime('%Y/%m/%d')}, Type: {self.props[idy]}"]
         if criteria not in self.listing:
             self.listing.append(criteria)
 
 start = time.perf_counter()
 people = []
 listings = []
-with open(r"./SearchResults.csv", "r") as file:
+with open(r"./SearchResults.csv", "r", encoding='utf-8') as file:
     content = csv.reader(file)
-
+    i = 0
     for c in content:
+        print(str(content.line_num))
         ind = 0
         if "PROBATE" in c[3]: ind = 0
         elif "LIEN" in c[3] or "LIS PENDENS" in c[3]: ind = 1
 
         person = Person(c[ind])
-        if person.checkValid() and c[ind] not in people:
+        if c[ind] not in people:
             person.getIds()
             if len(person.ids) > 0: 
                 person.getDetails()
                 people.append(person.name)
                 listings.extend(person.listing)
+        i += 1
 
 with open(r"result.csv", "w+", newline='', encoding='utf-8') as file:
     csvwriter = csv.writer(file)
-    csvwriter.writerow(["First Name", "Last Name", "Mail Address", "Mail City", "Mail State", "Mail Zip", "Property Address", "Property Address 2", "Property City", "Property State", "Property Zip", "NOTES"])
+    csvwriter.writerow(["First Name", "Last Name", "LLC Owner", "Relative Name", "Mail Address", "Mail City", "Mail State", "Mail Zip", "Property Address", "Property Address 2", "Property City", "Property State", "Property Zip", "NOTES"])
     csvwriter.writerows(listings) 
 
 print(f"{time.perf_counter() - start:0.4f}s")
